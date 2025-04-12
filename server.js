@@ -3,8 +3,8 @@ process.env.UV_THREADPOOL_SIZE = 1; // limiting the number of threads for I/O op
 const http = require("http");
 const os = require("os");
 const express = require("express");
-const cluster = require("cluster");
-const crypto = require("crypto");
+const { Worker } = require("node:worker_threads");
+const path = require("path");
 
 function getIpAddress() {
   const networkInterfaces = os.networkInterfaces();
@@ -21,57 +21,35 @@ function getIpAddress() {
 const ip = getIpAddress();
 const port = 3000;
 
-// if (cluster.isMaster) {
-//   console.log("Master cluster is up");
-//   // will be using pm2 instead 
-//   // const numCpus = os.cpus().length; 
-//   // for (let i = 0; i < 4; i++) {
-//   //   cluster.fork();
-//   // }
+const app = express();
 
-//   // Optional: Handle worker exits and log when a worker exits
-//   cluster.on("exit", (worker, code, signal) => {
-//     console.log(
-//       `Worker ${worker.id} died with code: ${code}, signal: ${signal}`
-//     );
-//   });
-// } else {
+const server = http.createServer(app);
 
-// }
 
-  console.log(`Worker thread ${cluster.worker.id} is up`);
+app.get("/", (req, res) => {
+  const worker = new Worker(path.resolve(__dirname, "worker.js"));
 
-  const app = express();
-
-  const server = http.createServer(app);
-
-  /**
-   * Perform a CPU-intensive task for a certain duration.
-   *
-   * @param {number} duration - The duration in milliseconds for which the work should be done.
-   */
-  app.get("/", (req, res) => {
-    const start = Date.now();
-    /**
-     * This line will get executed in the event loop, which means it won't be able
-     * to do other tasks while the operation is running. Consider offloading this work
-     * to a worker or using async/await to handle concurrency.
-     */
-    crypto.pbkdf2("a", "b", 100000, 512, "sha512", (err, derivedKey) => {
-      if (err) {
-        console.error("Error performing pbkdf2 operation:", err);
-        res.status(500).send("Internal Server Error");
-        return;
-      }
-      console.log(`1: ${Date.now() - start}ms`);
-      res.send("Operation completed");
-    });
+  worker.on("message", (counter) => {
+    console.log("counter", counter);
+    res.send(`Counted to ${counter}`);
   });
 
-  app.get("/fast", (req, res) => {
-    res.send("Fast response");
+  worker.on("error", (err) => {
+    console.error("Worker error:", err);
+    res.status(500).send("Worker error");
   });
 
-  server.listen(port, ip, () => {
-    console.log(`Server is listening on http://${ip}:${port}`);
+  worker.on("exit", (code) => {
+    if (code !== 0) {
+      console.error(`Worker stopped with exit code ${code}`);
+    }
   });
+});
+
+app.get("/fast", (req, res) => {
+  res.send("Fast response");
+});
+
+server.listen(port, ip, () => {
+  console.log(`Server is listening on http://${ip}:${port}`);
+});
